@@ -7,12 +7,21 @@
 #include <cassert>
 #include <cstdarg> // va_start()
 #include <syslog.h> // LOG_ERR
+#include <cstring> // strlen()
+#include <cstdio> // printf()
 
 #define VPRINTF(...) \
     do { \
-        printf("%s() L%d: \n", __func__, __LINE__); \
+        printf("%s() L%d: ", __func__, __LINE__); \
         printf(__VA_ARGS__); \
     } while (false)
+
+
+void err_sys(const char *fmt, ...);
+void err_quit(const char *fmt, ...);
+static void err_doit(int errnoflag, int level, const char *fmt, va_list ap);
+
+int daemon_proc;
 
 
 ssize_t readn(int fd, void *vptr, size_t n)
@@ -89,12 +98,18 @@ again:
 }
 
 
-/* Print a message and return to caller.
-   Caller specifies "errnoflag" and "level". */
-static void err_doit(int errnoflag, int level, const char *fmt, va_list ap)
+/* Fatal error related to a system call.
+   Print a message and terminate. */
+void err_sys(const char *fmt, ...)
 {
-    // todo: implement
-    ;
+    va_list ap;
+    va_start(ap, fmt);
+
+    err_doit(1, LOG_ERR, fmt, ap);
+
+    va_end(ap);
+    abort();
+    exit(1);
 }
 
 
@@ -106,6 +121,41 @@ void err_quit(const char *fmt, ...)
     va_start(ap, fmt);
     err_doit(0, LOG_ERR, fmt, ap);
     va_end(ap);
+}
+
+
+/* Print a message and return to caller.
+   Caller specifies "errnoflag" and "level". */
+static void err_doit(int errnoflag, int level, const char *fmt, va_list ap)
+{
+    const int kMaxLine = 63;
+
+    char buf[kMaxLine+1];
+
+#ifdef HAVE_VSNPRINTF
+    vsnprintf(buf, kMaxLine, fmt, ap);
+#else
+    vsprintf(buf, fmt, ap);
+#endif
+
+    int errno_save = errno;
+    int n = strlen(buf);
+
+    if (errnoflag)
+        snprintf(buf+n, kMaxLine - n, ": %s", strerror(errno_save));
+
+    strcat(buf, "\n");
+
+    if (daemon_proc)
+    {
+        syslog(level, "%s", buf);
+    }
+    else
+    {
+        fflush(stdout); /* in case stdout and stderr are the same */
+        fputs(buf, stderr);
+        fflush(stderr);
+    }
 }
 
 
